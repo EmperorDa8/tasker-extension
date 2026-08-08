@@ -138,18 +138,19 @@
     <ul>
       <li><strong>Web history / activity data:</strong> the domain, page title, URL, activity category (e.g. Development, Research), and the time you spend on active browser tabs.</li>
       <li><strong>User-provided content:</strong> accomplishment notes, milestones, and journal entries you type into the extension.</li>
-      <li><strong>Settings:</strong> your preferences, such as the Google Drive folder name, sync frequency, excluded-domain list, and (if you provide them) a custom Google OAuth Client ID or Gemini API key.</li>
+      <li><strong>Settings:</strong> your preferences, such as the Google Drive folder name, sync frequency, excluded-domain list, whether AI summaries are enabled, and (if you provide one) a custom Google OAuth Client ID.</li>
     </ul>
     <p>Tasker does <strong>not</strong> collect or handle: personally identifiable information beyond your Google account authorization, health or financial information, passwords or other credentials, keystrokes, page contents, form inputs, or mouse activity.</p>
 
     <h2>2. Where Your Data Is Stored</h2>
-    <p>All tracked activity, notes, and reports are stored <strong>locally in your browser</strong> using <code>chrome.storage.local</code>. Tasker has no backend server. We do not transmit, collect, or have access to any of your data. Nobody but you can see it.</p>
+    <p>All tracked activity, notes, and reports are stored <strong>locally in your browser</strong> using <code>chrome.storage.local</code>. Your browsing history &mdash; the sites you visit, page titles, and time per site &mdash; never leaves your device. There is no account, no login, and no analytics.</p>
+    <p>Tasker operates one small service, used only to write the optional AI monthly summary described below. It receives category totals only, never your browsing history, and only when that feature is switched on.</p>
 
     <h2>3. When Data Leaves Your Device</h2>
     <p>Data leaves your device <strong>only</strong> in these two cases, both fully under your control:</p>
     <ol>
       <li><strong>Google Drive sync (optional).</strong> When you click Sync (or enable automatic sync), Tasker uploads your daily log and monthly recap files (Markdown documents) to a folder in <strong>your own Google Drive account</strong>, authorized through Google's official OAuth 2.0 sign-in. The files are visible only to you under your Google account. Tasker requests the minimum Drive scope needed to create and update its own files. You can revoke this access at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
-      <li><strong>AI summaries (optional, off by default).</strong> If you choose to enter your own Google Gemini API key, the monthly summary text (aggregate category totals and your notes — not your raw browsing history) is sent to Google's Gemini API under your own key to generate an executive summary. If you never enter a key, nothing is ever sent.</li>
+      <li><strong>AI monthly summaries (optional, switchable off).</strong> When you open a monthly recap, Tasker asks our summary service to write a short narrative for that month. Only aggregate totals are sent: the month, your total tracked seconds, the number of active days, and seconds per category (for example "Development: 58 hours"). <strong>No URLs, page titles, domains, notes or milestones are ever sent</strong> — your browsing history cannot be reconstructed from this data. A random identifier generated on your device accompanies the request purely to apply a fair-use limit; it is tied to no account and to nothing identifying. The service forwards those totals to Google's Gemini API, returns the text, and does not retain the request. Switch this off in Settings and monthly recaps are generated entirely on your device.</li>
     </ol>
     <p>Google's handling of data in both cases is governed by the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</p>
 
