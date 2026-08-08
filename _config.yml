@@ -1,0 +1,5 @@
+# GitHub Pages serves index.html and privacy-policy.html from this repo.
+# The summary service lives here so Render can deploy it, but it is not part
+# of the website - exclude it from the published output.
+exclude:
+  - server
