@@ -8,6 +8,11 @@
  * Deliberately zero-dependency: runs on Node 18+ anywhere (Render, Railway, Fly,
  * a VPS) with no install step.
  *
+ * Also verifies Pro licences. Paddle is the system of record for who has paid,
+ * so there is no database here: the extension sends the order reference from the
+ * buyer's receipt and this asks Paddle whether that transaction is real,
+ * completed, and for the Tasker price.
+ *
  * Required env:
  *   GEMINI_API_KEY        your Google Gemini API key
  * Optional env:
@@ -17,9 +22,23 @@
  *   MAX_GLOBAL_PER_DAY    default 300
  *   MIN_SECONDS_BETWEEN   default 20
  *   GEMINI_MODEL          default gemini-1.5-flash
+ * Licence verification (optional; without these /v1/license/verify returns 501):
+ *   PADDLE_API_KEY        Paddle server-side API key
+ *   PADDLE_ENV           'sandbox' or 'live'  (default sandbox)
+ *   PADDLE_PRICE_IDS      comma-separated price IDs that grant Pro
  */
 
 const http = require('http');
+
+const PADDLE_API_KEY = process.env.PADDLE_API_KEY || '';
+const PADDLE_ENV = (process.env.PADDLE_ENV || 'sandbox').toLowerCase();
+// PADDLE_API_BASE exists so the verification path can be pointed at a stub in
+// tests. Leave it unset in production and the environment picks the host.
+const PADDLE_BASE = process.env.PADDLE_API_BASE || (PADDLE_ENV === 'live'
+  ? 'https://api.paddle.com'
+  : 'https://sandbox-api.paddle.com');
+const PADDLE_PRICE_IDS = (process.env.PADDLE_PRICE_IDS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
@@ -48,8 +67,10 @@ function thisMonthKey() { return new Date().toISOString().slice(0, 7); }
 setInterval(() => {
   const month = thisMonthKey();
   const day = todayKey();
+  const hour = new Date().toISOString().slice(0, 13);
   for (const [k, v] of installUsage) if (v.monthKey !== month) installUsage.delete(k);
   for (const [k, v] of ipUsage) if (v.dayKey !== day) ipUsage.delete(k);
+  for (const [k, v] of licenseAttempts) if (v.hour !== hour) licenseAttempts.delete(k);
 }, 60 * 60 * 1000).unref();
 
 function checkQuota(installId, ip) {
@@ -175,6 +196,65 @@ Return JSON with exactly two fields:
   };
 }
 
+// ---------------------------------------------------------------- licences
+
+// Verification attempts per IP per hour. A transaction ID is the only thing
+// standing between a stranger and a free unlock, so guessing has to be
+// expensive even though the keyspace is large.
+const LICENSE_ATTEMPTS_PER_HOUR = 20;
+const licenseAttempts = new Map(); // ip -> { hour, count }
+
+function allowLicenseAttempt(ip) {
+  const hour = new Date().toISOString().slice(0, 13);
+  const record = licenseAttempts.get(ip);
+  if (!record || record.hour !== hour) {
+    licenseAttempts.set(ip, { hour, count: 1 });
+    return true;
+  }
+  if (record.count >= LICENSE_ATTEMPTS_PER_HOUR) return false;
+  record.count++;
+  return true;
+}
+
+/**
+ * Check an order reference against Paddle.
+ *
+ * Paddle holds the truth about who paid, so nothing is stored here. A
+ * transaction ID is a 26-character random string, so it is not guessable - but
+ * it is also not a secret the way a password is. That is an accepted trade for
+ * a $49 one-time product: the cost of someone sharing a reference is one extra
+ * unlock, and the alternative is running an account system for a tool whose
+ * entire pitch is that it has no accounts.
+ */
+async function verifyPaddleTransaction(reference) {
+  const res = await fetch(`${PADDLE_BASE}/transactions/${encodeURIComponent(reference)}`, {
+    headers: { 'Authorization': `Bearer ${PADDLE_API_KEY}` }
+  });
+
+  if (res.status === 404) return { valid: false, reason: 'not_found' };
+  if (!res.ok) throw new Error(`paddle_${res.status}`);
+
+  const body = await res.json();
+  const txn = body && body.data;
+  if (!txn) return { valid: false, reason: 'not_found' };
+
+  // Only a paid transaction counts. 'billed' and 'past_due' mean an invoice was
+  // raised, not that money arrived.
+  if (txn.status !== 'completed' && txn.status !== 'paid') {
+    return { valid: false, reason: 'not_paid', status: txn.status };
+  }
+
+  // And it must be for something that actually grants Pro, or any past purchase
+  // from the same Paddle account would unlock the extension.
+  if (PADDLE_PRICE_IDS.length) {
+    const items = txn.items || [];
+    const match = items.some(item => item.price && PADDLE_PRICE_IDS.includes(item.price.id));
+    if (!match) return { valid: false, reason: 'wrong_product' };
+  }
+
+  return { valid: true, plan: 'lifetime', purchasedAt: txn.billed_at || txn.created_at || null };
+}
+
 // ---------------------------------------------------------------- http
 function originAllowed(origin) {
   if (!origin || !origin.startsWith('chrome-extension://')) return false;
@@ -204,11 +284,19 @@ const server = http.createServer(async (req, res) => {
     return send(res, 204, {}, origin);
   }
 
-  if (req.method !== 'POST' || req.url !== '/v1/monthly-summary') {
+  const route = String(req.url || '').split('?')[0];
+  const ROUTES = ['/v1/monthly-summary', '/v1/license/verify'];
+
+  if (req.method !== 'POST' || ROUTES.indexOf(route) === -1) {
     return send(res, 404, { error: 'not_found' }, null);
   }
   if (!originAllowed(origin)) return send(res, 403, { error: 'forbidden_origin' }, null);
-  if (!GEMINI_API_KEY) return send(res, 500, { error: 'server_not_configured' }, origin);
+  if (route === '/v1/monthly-summary' && !GEMINI_API_KEY) {
+    return send(res, 500, { error: 'server_not_configured' }, origin);
+  }
+  if (route === '/v1/license/verify' && !PADDLE_API_KEY) {
+    return send(res, 501, { error: 'licensing_not_configured' }, origin);
+  }
 
   let raw = '';
   let tooBig = false;
@@ -234,11 +322,30 @@ const server = http.createServer(async (req, res) => {
     let body;
     try { body = JSON.parse(raw); } catch { return send(res, 400, { error: 'invalid_json' }, origin); }
 
-    const invalid = validPayload(body);
-    if (invalid) return send(res, 400, { error: 'invalid_payload', detail: invalid }, origin);
-
     const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
       req.socket.remoteAddress || 'unknown';
+
+    if (route === '/v1/license/verify') {
+      const reference = String((body && body.reference) || '').trim();
+      if (!/^txn_[a-z0-9]{20,40}$/i.test(reference)) {
+        return send(res, 400, { error: 'invalid_reference' }, origin);
+      }
+      // Rate limited by IP so the endpoint cannot be used to probe for valid
+      // references, which are the only credential Pro has.
+      if (!allowLicenseAttempt(ip)) {
+        return send(res, 429, { error: 'too_many_attempts' }, origin);
+      }
+      try {
+        const result = await verifyPaddleTransaction(reference);
+        return send(res, 200, result, origin);
+      } catch (err) {
+        console.warn('licence check failed:', err && err.message);
+        return send(res, 502, { error: 'verification_unavailable' }, origin);
+      }
+    }
+
+    const invalid = validPayload(body);
+    if (invalid) return send(res, 400, { error: 'invalid_payload', detail: invalid }, origin);
 
     const quota = checkQuota(body.installId, ip);
     if (!quota.ok) return send(res, quota.status, { error: quota.reason }, origin);
