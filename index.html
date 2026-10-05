@@ -846,7 +846,7 @@
 
         <div class="plan is-pro">
           <span class="plan-name">Pro &mdash; one payment, yours for good</span>
-          <div class="plan-price">$49<span class="unit">once</span></div>
+          <div class="plan-price">$29<span class="unit">once</span></div>
           <p class="plan-sub">No subscription. Tasker runs on your machine, so there is nothing to rent.</p>
           <ul class="plan-list">
             <li><span class="tick"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#2A0F14" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span><strong style="color:#F8FAF7">Unlimited history</strong> &mdash; every month you have tracked</li>
@@ -855,14 +855,15 @@
             <li><span class="tick"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#2A0F14" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>15 AI monthly summaries a month</li>
             <li><span class="tick"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#2A0F14" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>Every future update included</li>
           </ul>
-          <button class="btn btn-primary" data-paddle-checkout type="button">Get Tasker Pro</button>
+          <button class="btn btn-primary" data-checkout type="button">Get Tasker Pro</button>
           <p class="plan-note">30-day refund, no questions asked</p>
         </div>
       </div>
 
       <p class="pricing-foot">
-        Already bought? Open Tasker&rsquo;s <strong>Settings &rarr; Your plan</strong> and paste the order
-        reference from your receipt. Questions: <a href="mailto:uabdul88@gmail.com">uabdul88@gmail.com</a>
+        Bought it here? Open Tasker&rsquo;s <strong>Settings &rarr; Your plan</strong>, sign in or create an
+        account, and paste the order reference (it starts with <code style="font-family:var(--mono)">chk_</code>)
+        from your receipt. Buying from inside Tasker needs none of that. Questions: <a href="mailto:uabdul88@gmail.com">uabdul88@gmail.com</a>
       </p>
     </div>
   </section>
@@ -900,75 +901,66 @@
 </footer>
 
 <!--
-  Paddle checkout.
+  Checkout.
 
-  Paddle is the merchant of record: it is the legal seller, and it collects and
-  files VAT/GST in the 140+ countries that charge it on digital goods. That is
-  what the fee buys - a solo seller otherwise has to register for EU OSS and
-  file quarterly themselves.
+  The button asks the Tasker service to open a hosted Bachs checkout and sends
+  the buyer there. No payment key lives on this page - the secret stays on the
+  service, which is the only thing that can create a checkout or say one was
+  paid. The buyer lands on thanks.html afterwards, where the order reference is
+  shown for pasting into the extension.
 
-  TWO VALUES MUST BE SET BEFORE THIS TAKES MONEY:
-    PADDLE_TOKEN  Paddle dashboard -> Developer tools -> Authentication ->
-                  client-side token. Safe to publish; it can only open a
-                  checkout. Sandbox tokens start test_, live ones live_.
-    PADDLE_PRICE  the price to sell. The sandbox one is filled in below.
-
-  Leave PADDLE_ENV as 'sandbox' until a test card has gone all the way through.
+  The service is on a free host that sleeps when idle, so the first click can
+  take a while; the button says so rather than appearing to do nothing.
 -->
-<script src="https://cdn.paddle.com/paddle/v2/paddle.js"></script>
 <script>
   (function () {
-    var PADDLE_ENV   = 'sandbox';
-    var PADDLE_TOKEN = 'REPLACE_WITH_YOUR_CLIENT_SIDE_TOKEN';
-    var PADDLE_PRICE = 'pri_01m2xhy5nfynbdxmfnsdfcmy5z';
+    var SERVICE = 'https://tasker-extension.onrender.com';
+    var buttons = document.querySelectorAll('[data-checkout]');
+    if (!buttons.length) return;
 
-    var buttons = document.querySelectorAll('[data-paddle-checkout]');
-    if (!buttons.length || typeof Paddle === 'undefined') return;
+    // Anonymous and per page-load. It only lets a payment be traced to a visit
+    // from the Bachs dashboard if someone writes in.
+    function visitorId() {
+      if (window.crypto && crypto.randomUUID) return 'web_' + crypto.randomUUID();
+      return 'web_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+    }
 
-    var configured = PADDLE_TOKEN.indexOf('REPLACE_') !== 0;
-
-    if (configured) {
-      if (PADDLE_ENV === 'sandbox') Paddle.Environment.set('sandbox');
-      Paddle.Initialize({
-        token: PADDLE_TOKEN,
-        eventCallback: function (data) {
-          // The order reference the buyer pastes into the extension. Shown here
-          // as well as emailed, because a receipt that has not arrived yet is
-          // the most common reason a new customer writes in.
-          if (data.name === 'checkout.completed') {
-            var ref = data.data && data.data.transaction_id;
-            if (ref) {
-              var foot = document.querySelector('.pricing-foot');
-              if (foot) {
-                foot.innerHTML =
-                  '<strong>Thank you.</strong> Your order reference is ' +
-                  '<code style="font-family:var(--mono);background:var(--surface);' +
-                  'padding:2px 7px;border-radius:6px">' + ref + '</code><br>' +
-                  'Paste it into Tasker under Settings &rarr; Your plan to unlock Pro. ' +
-                  'It is in your emailed receipt too.';
-              }
-            }
-          }
-        }
-      });
+    function fallback() {
+      window.location.href = 'mailto:uabdul88@gmail.com' +
+        '?subject=Tasker%20Pro&body=I%27d%20like%20to%20buy%20Tasker%20Pro.';
     }
 
     Array.prototype.forEach.call(buttons, function (btn) {
+      var label = btn.textContent;
       btn.addEventListener('click', function () {
-        if (!configured) {
-          // Better than a checkout that silently fails to open.
-          window.location.href = 'mailto:uabdul88@gmail.com' +
-            '?subject=Tasker%20Pro&body=I%27d%20like%20to%20buy%20Tasker%20Pro.';
-          return;
-        }
-        Paddle.Checkout.open({
-          items: [{ priceId: PADDLE_PRICE, quantity: 1 }],
-          settings: {
-            displayMode: 'overlay',
-            theme: 'light',
-            successUrl: window.location.origin + window.location.pathname + '#pro'
-          }
-        });
+        btn.disabled = true;
+        btn.textContent = 'Opening checkout\u2026';
+
+        var controller = new AbortController();
+        var timer = setTimeout(function () { controller.abort(); }, 60000);
+
+        fetch(SERVICE + '/v1/checkout/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ installId: visitorId() }),
+          signal: controller.signal
+        })
+          .then(function (res) {
+            if (!res.ok) throw new Error('status ' + res.status);
+            return res.json();
+          })
+          .then(function (data) {
+            // Only ever navigate to an https page.
+            if (!data || !/^https:\/\//i.test(data.checkoutUrl || '')) throw new Error('bad response');
+            window.location.href = data.checkoutUrl;
+          })
+          .catch(function () {
+            // Better than a button that silently does nothing.
+            btn.disabled = false;
+            btn.textContent = label;
+            fallback();
+          })
+          .then(function () { clearTimeout(timer); });
       });
     });
   })();
